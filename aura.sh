@@ -44,7 +44,7 @@ print_double_line() {
 
 print_banner() {
     clear
-    echo -e "${CYAN}┌────────────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${MAGENTA}${BOLD}"
     echo "     █████╗ ██╗   ██╗██████╗  █████╗ "
     echo "    ██╔══██╗██║   ██║██╔══██╗██╔══██╗"
@@ -54,8 +54,8 @@ print_banner() {
     echo "    ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝"
     echo -e "${NC}"
     echo -e "         ${BOLD}Phoenix Tunnel Manager - ${YELLOW}${VERSION}${NC}"
-    echo -e "         ${BLUE}Channel: ${TELEGRAM_LINK}${NC}"
-    echo -e "${CYAN}└─────────────────────────────────────────────────────────────────────────────┘${NC}"
+    # echo -e "         ${BLUE}Channel: ${TELEGRAM_LINK}${NC}"
+    echo -e "${CYAN}└─────────────────────────────────────────────────────────────┘${NC}"
     
     # Status Section - Show all instances
     local server_instances=($(detect_instances "server"))
