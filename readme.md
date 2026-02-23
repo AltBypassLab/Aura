@@ -475,15 +475,12 @@ Client Management → 11) Rename Instance
 
 ### لینک‌های مفید:
 🔗 **پروژه Phoenix**: [github.com/Fox-Fig/phoenix](https://github.com/Fox-Fig/phoenix)  
-📱 **کانال تلگرام**: [@AltBypassLab](https://t.me/AltBypassLab)  
 💻 **ریپازیتوری**: [github.com/AltBypassLab/Aura](https://github.com/AltBypassLab/Aura)  
 📚 **مستندات Phoenix**: [fox-fig.github.io/phoenix](https://fox-fig.github.io/phoenix/fa/)
 
 ### راه‌های ارتباطی:
 - **گزارش باگ**: [GitHub Issues](https://github.com/AltBypassLab/Aura/issues)
 - **درخواست ویژگی**: [GitHub Discussions](https://github.com/AltBypassLab/Aura/discussions)
-- **سوالات**: کانال تلگرام
-
 ---
 
 ## ❤️ حمایت از پروژه
