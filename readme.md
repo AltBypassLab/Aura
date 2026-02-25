@@ -121,7 +121,7 @@ sudo ./aura.sh
 5. انتخاب: `1) Add New Port Forward`
 6. تنظیمات:
    - Local listen port: `10000`
-   - Destination IP: `45.76.29.174` (IP سرور خارج)
+   - Destination IP: `xxx.xxx.xxx.xxx` (IP سرور خارج)
    - Destination port: `10000`
    - Name: `xray`
 
@@ -133,7 +133,7 @@ sudo ./aura.sh
   "outbounds": [{
     "settings": {
       "vnext": [{
-        "address": "213.176.7.189",  // IP سرور ایران
+        "address": "yyy.yyy.yyy.yyy",  // IP سرور ایران
         "port": 10000
       }]
     }
@@ -299,9 +299,9 @@ sudo ./aura.sh
 
 ```
 ┌── Server Connection Details ──────────────────────────────┐
-  Server IP:      45.76.29.174
+  Server IP:      xxx.xxx.xxx.xxx
   Phoenix Port:   443
-  Connection:     45.76.29.174:443
+  Connection:     xxx.xxx.xxx.xxx:443
 └────────────────────────────────────────────────────────────┘
 
 ┌── Server Key Information ─────────────────────────────────┐
@@ -312,7 +312,7 @@ sudo ./aura.sh
 
 ┌── Client Configuration Recommendation ────────────────────┐
   For Fingerprint Spoofing (DPI Bypass):
-  remote_addr = "45.76.29.174:443"
+  remote_addr = "xxx.xxx.xxx.xxx:443"
   tls_mode = "insecure"
   fingerprint = "chrome"  # Recommended
 └────────────────────────────────────────────────────────────┘
@@ -1432,7 +1432,7 @@ bash aura.sh
 
 ```
 Local listen port: 2222
-Destination IP: 45.76.29.174  (IP سرور خارج)
+Destination IP: xxx.xxx.xxx.xxx  (IP سرور خارج)
 Destination port: 22
 Name: ssh-server
 ```
@@ -1440,7 +1440,7 @@ Name: ssh-server
 **استفاده:**
 ```bash
 # از کامپیوتر خودتون:
-ssh root@213.176.7.189 -p 2222
+ssh root@yyy.yyy.yyy.yyy -p 2222
 
 # یا اگر سرور ایران دامنه داره:
 ssh root@iran-server.com -p 2222
@@ -1452,7 +1452,7 @@ ssh root@iran-server.com -p 2222
 
 ```
 Local listen port: 3306
-Destination IP: 45.76.29.174
+Destination IP: xxx.xxx.xxx.xxx
 Destination port: 3306
 Name: mysql-db
 ```
@@ -1460,10 +1460,10 @@ Name: mysql-db
 **استفاده:**
 ```bash
 # از کامپیوتر خودتون:
-mysql -h 213.176.7.189 -P 3306 -u username -p
+mysql -h yyy.yyy.yyy.yyy -P 3306 -u username -p
 
 # یا در کد PHP:
-$host = "213.176.7.189";
+$host = "yyy.yyy.yyy.yyy";
 $port = 3306;
 ```
 
@@ -1473,7 +1473,7 @@ $port = 3306;
 
 ```
 Local listen port: 10000
-Destination IP: 45.76.29.174
+Destination IP: xxx.xxx.xxx.xxx
 Destination port: 10000
 Name: xray
 ```
@@ -1486,7 +1486,7 @@ Name: xray
     "protocol": "vmess",
     "settings": {
       "vnext": [{
-        "address": "213.176.7.189",  // IP سرور ایران
+        "address": "yyy.yyy.yyy.yyy",  // IP سرور ایران
         "port": 10000,
         "users": [...]
       }]
@@ -1501,14 +1501,14 @@ Name: xray
 
 ```
 Local listen port: 8080
-Destination IP: 45.76.29.174
+Destination IP: xxx.xxx.xxx.xxx
 Destination port: 80
 Name: web-panel
 ```
 
 **استفاده:**
 ```
-مرورگر: http://213.176.7.189:8080
+مرورگر: http://yyy.yyy.yyy.yyy:8080
 ```
 
 ### ⚙️ گزینه‌های مدیریت
@@ -1566,10 +1566,10 @@ systemctl restart gost-pf-NAME
 
 ```bash
 # فقط از IP خاص اجازه دسترسی:
-ufw allow from 217.218.38.97 to any port 10000
+ufw allow from zzz.zzz.zzz.zzz to any port 10000
 
 # یا محدود کردن به رنج IP:
-ufw allow from 217.218.0.0/16 to any port 10000
+ufw allow from zzz.zzz.0.0/16 to any port 10000
 ```
 
 ### 🐛 عیب‌یابی
@@ -1630,9 +1630,9 @@ ufw disable
 ### 📊 مثال واقعی (X-ray Tunnel)
 
 #### سناریو:
-- سرور خارج: `45.76.29.174` (X-ray روی پورت 10000)
-- سرور ایران: `213.176.7.189` (Phoenix Client + Port Forward)
-- کامپیوتر شما: `217.218.38.97`
+- سرور خارج: `xxx.xxx.xxx.xxx` (X-ray روی پورت 10000)
+- سرور ایران: `yyy.yyy.yyy.yyy` (Phoenix Client + Port Forward)
+- کامپیوتر شما: `zzz.zzz.zzz.zzz`
 
 #### مراحل:
 
@@ -1649,7 +1649,7 @@ bash aura.sh
 # Client Management → Port Forward Management
 # Add New Port Forward:
 # Local: 10000
-# Destination: 45.76.29.174
+# Destination: xxx.xxx.xxx.xxx
 # Port: 10000
 # Name: xray
 ```
@@ -1662,7 +1662,7 @@ bash aura.sh
     "protocol": "vmess",
     "settings": {
       "vnext": [{
-        "address": "213.176.7.189",  // IP سرور ایران
+        "address": "yyy.yyy.yyy.yyy",  // IP سرور ایران
         "port": 10000
       }]
     }
@@ -1676,7 +1676,7 @@ bash aura.sh
 journalctl -u gost-pf-xray -f
 
 # باید لاگ‌های اتصال رو ببینید:
-# [tcp] YOUR_IP:PORT <-> 45.76.29.174:10000
+# [tcp] YOUR_IP:PORT <-> xxx.xxx.xxx.xxx:10000
 ```
 
 ### 💡 نکات مهم
