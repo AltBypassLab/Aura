@@ -1365,6 +1365,514 @@ EOF
     wait_for_enter
 }
 
+# Port Forward Management with Gost
+manage_port_forward() {
+    while true; do
+        print_banner
+        echo -e "${BOLD}${MAGENTA}>> Port Forward Management (Gost)${NC}\n"
+        
+        # List existing port forwards
+        local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+        
+        if [ ${#pf_services[@]} -gt 0 ]; then
+            echo -e "${CYAN}Active Port Forwards:${NC}"
+            for svc in "${pf_services[@]}"; do
+                local status_icon="${RED}⚫${NC}"
+                if systemctl is-active --quiet "$svc"; then
+                    status_icon="${GREEN}●${NC}"
+                fi
+                
+                # Extract port info from service name
+                local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+                echo -e "  $status_icon ${CYAN}$pf_name${NC}"
+            done
+            echo ""
+        else
+            echo -e "${YELLOW}No port forwards configured yet.${NC}\n"
+        fi
+        
+        echo -e "${BOLD}${MAGENTA}Options:${NC}"
+        echo -e "   1) ${GREEN}Add New Port Forward${NC}"
+        echo -e "   2) ${BLUE}List Port Forwards${NC}"
+        echo -e "   3) ${YELLOW}Stop Port Forward${NC}"
+        echo -e "   4) ${GREEN}Start Port Forward${NC}"
+        echo -e "   5) ${CYAN}View Port Forward Logs${NC}"
+        echo -e "   6) ${RED}Remove Port Forward${NC}"
+        echo -e "   0) ${YELLOW}Back${NC}"
+        
+        ask_question "Option" "0"
+        read -r pf_opt
+        pf_opt=${pf_opt:-0}
+        echo -en "${NC}"
+        
+        case $pf_opt in
+            1)
+                add_port_forward
+                ;;
+            2)
+                list_port_forwards
+                ;;
+            3)
+                stop_port_forward
+                ;;
+            4)
+                start_port_forward
+                ;;
+            5)
+                view_port_forward_logs
+                ;;
+            6)
+                remove_port_forward
+                ;;
+            0)
+                break
+                ;;
+            *)
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+add_port_forward() {
+    print_banner
+    echo -e "${GREEN}${BOLD}${ICON_GEAR} Add New Port Forward${NC}\n"
+    
+    # Check if gost is installed
+    if ! command -v gost &> /dev/null; then
+        echo -e "${YELLOW}${ICON_DOWNLOAD} Gost is not installed. Installing...${NC}\n"
+        
+        # Detect architecture
+        local arch=$(detect_architecture)
+        local gost_url=""
+        
+        if [ "$arch" == "amd64" ]; then
+            gost_url="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+        elif [ "$arch" == "arm64" ]; then
+            gost_url="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-armv8-2.11.5.gz"
+        else
+            echo -e "${RED}${ICON_ERROR} Unsupported architecture for gost!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        # Download and install gost
+        echo -e "${CYAN}Downloading from: ${gost_url}${NC}"
+        if wget -q --spider "$gost_url" 2>/dev/null; then
+            wget -q --show-progress "$gost_url" -O /tmp/gost.gz
+            
+            # Check if download was successful
+            if [ ! -f /tmp/gost.gz ] || [ ! -s /tmp/gost.gz ]; then
+                echo -e "${RED}${ICON_ERROR} Download failed!${NC}"
+                rm -f /tmp/gost.gz
+                wait_for_enter
+                return
+            fi
+            
+            gunzip -f /tmp/gost.gz
+            
+            # Check if gunzip was successful
+            if [ ! -f /tmp/gost ]; then
+                echo -e "${RED}${ICON_ERROR} Failed to extract gost!${NC}"
+                rm -f /tmp/gost.gz
+                wait_for_enter
+                return
+            fi
+            
+            chmod +x /tmp/gost
+            mv /tmp/gost /usr/local/bin/gost
+            
+            echo -e "${GREEN}${ICON_SUCCESS} Gost installed successfully!${NC}\n"
+        else
+            echo -e "${RED}${ICON_ERROR} Failed to download gost from GitHub!${NC}"
+            echo -e "${YELLOW}Trying alternative source...${NC}\n"
+            
+            # Try alternative source (direct binary without compression)
+            local alt_url="https://sourceforge.net/projects/gost.mirror/files/v2.11.5/gost-linux-amd64-2.11.5.gz/download"
+            if [ "$arch" == "arm64" ]; then
+                alt_url="https://sourceforge.net/projects/gost.mirror/files/v2.11.5/gost-linux-armv8-2.11.5.gz/download"
+            fi
+            
+            wget -q --show-progress "$alt_url" -O /tmp/gost.gz
+            
+            if [ ! -f /tmp/gost.gz ] || [ ! -s /tmp/gost.gz ]; then
+                echo -e "${RED}${ICON_ERROR} Alternative download also failed!${NC}"
+                echo -e "${YELLOW}Please install gost manually:${NC}"
+                echo -e "${CYAN}wget https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz${NC}"
+                echo -e "${CYAN}gunzip gost-linux-amd64-2.11.5.gz${NC}"
+                echo -e "${CYAN}chmod +x gost-linux-amd64-2.11.5${NC}"
+                echo -e "${CYAN}mv gost-linux-amd64-2.11.5 /usr/local/bin/gost${NC}"
+                rm -f /tmp/gost.gz
+                wait_for_enter
+                return
+            fi
+            
+            gunzip -f /tmp/gost.gz
+            
+            if [ ! -f /tmp/gost ]; then
+                echo -e "${RED}${ICON_ERROR} Failed to extract gost!${NC}"
+                rm -f /tmp/gost.gz
+                wait_for_enter
+                return
+            fi
+            
+            chmod +x /tmp/gost
+            mv /tmp/gost /usr/local/bin/gost
+            
+            echo -e "${GREEN}${ICON_SUCCESS} Gost installed successfully!${NC}\n"
+        fi
+    fi
+    
+    # Get SOCKS5 port from client config
+    local socks_port=$(grep -A2 'protocol = "socks5"' "$INSTALL_DIR/client.toml" | grep "local_addr" | grep -oE ':[0-9]+' | grep -oE '[0-9]+' | head -1)
+    
+    if [ -z "$socks_port" ]; then
+        echo -e "${RED}${ICON_ERROR} SOCKS5 proxy not found in client config!${NC}"
+        echo -e "${YELLOW}Please make sure Phoenix client has SOCKS5 enabled.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}Phoenix SOCKS5 proxy detected on port: ${GREEN}$socks_port${NC}\n"
+    print_line
+    
+    # Get port forward details
+    ask_question "Enter local listen port (port to open on this server)"
+    read -r local_port
+    echo -en "${NC}"
+    
+    if [ -z "$local_port" ]; then
+        echo -e "${RED}${ICON_ERROR} Local port cannot be empty!${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    # Check if port is already in use
+    if is_port_in_use "$local_port"; then
+        echo -e "${RED}${ICON_ERROR} Port $local_port is already in use!${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    ask_question "Enter destination IP (target server IP)"
+    read -r dest_ip
+    echo -en "${NC}"
+    
+    if [ -z "$dest_ip" ]; then
+        echo -e "${RED}${ICON_ERROR} Destination IP cannot be empty!${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    ask_question "Enter destination port (target server port)"
+    read -r dest_port
+    echo -en "${NC}"
+    
+    if [ -z "$dest_port" ]; then
+        echo -e "${RED}${ICON_ERROR} Destination port cannot be empty!${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    ask_question "Enter a name for this forward (e.g., ssh, web, mysql)" "forward-${local_port}"
+    read -r pf_name
+    pf_name=${pf_name:-forward-${local_port}}
+    echo -en "${NC}"
+    
+    # Validate name
+    if ! [[ "$pf_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}${ICON_ERROR} Invalid name! Only English letters, numbers, hyphens, and underscores allowed.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    local service_name="gost-pf-${pf_name}"
+    local service_file="/etc/systemd/system/${service_name}.service"
+    
+    # Check if service already exists
+    if [ -f "$service_file" ]; then
+        echo -e "${RED}${ICON_ERROR} Port forward with name '${pf_name}' already exists!${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    # Create systemd service
+    cat > "$service_file" <<EOF
+[Unit]
+Description=Gost Port Forward - ${pf_name} (${local_port} -> ${dest_ip}:${dest_port})
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/gost -L=tcp://0.0.0.0:${local_port}/${dest_ip}:${dest_port} -F=socks5://127.0.0.1:${socks_port}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Enable and start service
+    systemctl daemon-reload
+    systemctl enable "$service_name" --now > /dev/null 2>&1
+    
+    print_double_line
+    echo -e "${GREEN}${BOLD}${ICON_SUCCESS} Port Forward Created Successfully!${NC}"
+    print_double_line
+    echo -e "${CYAN}${BOLD}Configuration:${NC}"
+    echo -e "  ${WHITE}Name:${NC}        ${CYAN}${pf_name}${NC}"
+    echo -e "  ${WHITE}Listen:${NC}      ${CYAN}0.0.0.0:${local_port}${NC}"
+    echo -e "  ${WHITE}Forward to:${NC}  ${CYAN}${dest_ip}:${dest_port}${NC}"
+    echo -e "  ${WHITE}Via SOCKS5:${NC}  ${CYAN}127.0.0.1:${socks_port}${NC}"
+    echo -e "  ${WHITE}Service:${NC}     ${CYAN}${service_name}${NC}"
+    print_double_line
+    
+    # Check if service started successfully
+    sleep 1
+    if systemctl is-active --quiet "$service_name"; then
+        echo -e "${GREEN}${ICON_SUCCESS} Service is running!${NC}"
+    else
+        echo -e "${RED}${ICON_ERROR} Service failed to start!${NC}"
+        echo -e "${YELLOW}Check logs with: journalctl -u ${service_name} -n 50${NC}"
+    fi
+    
+    wait_for_enter
+}
+
+list_port_forwards() {
+    print_banner
+    echo -e "${CYAN}${BOLD}${ICON_INFO} Port Forward List${NC}\n"
+    
+    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    
+    if [ ${#pf_services[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No port forwards configured.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+    
+    for svc in "${pf_services[@]}"; do
+        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local service_file="/etc/systemd/system/${svc}"
+        
+        # Get status
+        local status="${RED}INACTIVE${NC}"
+        local status_icon="${RED}⚫${NC}"
+        if systemctl is-active --quiet "$svc"; then
+            status="${GREEN}ACTIVE${NC}"
+            status_icon="${GREEN}●${NC}"
+        fi
+        
+        # Extract config from service file
+        if [ -f "$service_file" ]; then
+            local description=$(grep "^Description=" "$service_file" | cut -d'=' -f2-)
+            local exec_start=$(grep "^ExecStart=" "$service_file" | cut -d'=' -f2-)
+            
+            # Parse gost command
+            local local_port=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:\K[0-9]+' | head -1)
+            local dest=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:[0-9]+/\K[^[:space:]]+' | head -1)
+            local socks=$(echo "$exec_start" | grep -oP 'socks5://\K[^[:space:]]+' | head -1)
+            
+            echo -e "  $status_icon ${BOLD}${WHITE}${pf_name}${NC} - $status"
+            echo -e "     ${CYAN}Listen:${NC}      0.0.0.0:${local_port}"
+            echo -e "     ${CYAN}Forward to:${NC}  ${dest}"
+            echo -e "     ${CYAN}Via SOCKS5:${NC}  ${socks}"
+            echo -e ""
+        fi
+    done
+    
+    echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+    wait_for_enter
+}
+
+stop_port_forward() {
+    print_banner
+    echo -e "${YELLOW}${BOLD}${ICON_GEAR} Stop Port Forward${NC}\n"
+    
+    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    
+    if [ ${#pf_services[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No port forwards configured.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}Select port forward to stop:${NC}\n"
+    
+    local i=1
+    for svc in "${pf_services[@]}"; do
+        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local status="${RED}INACTIVE${NC}"
+        if systemctl is-active --quiet "$svc"; then
+            status="${GREEN}ACTIVE${NC}"
+        fi
+        echo -e "  $i) ${CYAN}${pf_name}${NC} - $status"
+        ((i++))
+    done
+    echo -e "  0) ${YELLOW}Cancel${NC}\n"
+    
+    ask_question "Select" "0"
+    read -r choice
+    choice=${choice:-0}
+    echo -en "${NC}"
+    
+    if [ "$choice" == "0" ] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#pf_services[@]} ]; then
+        return
+    fi
+    
+    local selected_svc="${pf_services[$((choice-1))]}"
+    
+    systemctl stop "$selected_svc"
+    echo -e "\n${GREEN}${ICON_SUCCESS} Port forward stopped: ${CYAN}${selected_svc}${NC}"
+    wait_for_enter
+}
+
+start_port_forward() {
+    print_banner
+    echo -e "${GREEN}${BOLD}${ICON_GEAR} Start Port Forward${NC}\n"
+    
+    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    
+    if [ ${#pf_services[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No port forwards configured.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}Select port forward to start:${NC}\n"
+    
+    local i=1
+    for svc in "${pf_services[@]}"; do
+        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local status="${RED}INACTIVE${NC}"
+        if systemctl is-active --quiet "$svc"; then
+            status="${GREEN}ACTIVE${NC}"
+        fi
+        echo -e "  $i) ${CYAN}${pf_name}${NC} - $status"
+        ((i++))
+    done
+    echo -e "  0) ${YELLOW}Cancel${NC}\n"
+    
+    ask_question "Select" "0"
+    read -r choice
+    choice=${choice:-0}
+    echo -en "${NC}"
+    
+    if [ "$choice" == "0" ] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#pf_services[@]} ]; then
+        return
+    fi
+    
+    local selected_svc="${pf_services[$((choice-1))]}"
+    
+    systemctl start "$selected_svc"
+    echo -e "\n${GREEN}${ICON_SUCCESS} Port forward started: ${CYAN}${selected_svc}${NC}"
+    wait_for_enter
+}
+
+view_port_forward_logs() {
+    print_banner
+    echo -e "${CYAN}${BOLD}${ICON_INFO} View Port Forward Logs${NC}\n"
+    
+    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    
+    if [ ${#pf_services[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No port forwards configured.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}Select port forward to view logs:${NC}\n"
+    
+    local i=1
+    for svc in "${pf_services[@]}"; do
+        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local status="${RED}INACTIVE${NC}"
+        if systemctl is-active --quiet "$svc"; then
+            status="${GREEN}ACTIVE${NC}"
+        fi
+        echo -e "  $i) ${CYAN}${pf_name}${NC} - $status"
+        ((i++))
+    done
+    echo -e "  0) ${YELLOW}Cancel${NC}\n"
+    
+    ask_question "Select" "0"
+    read -r choice
+    choice=${choice:-0}
+    echo -en "${NC}"
+    
+    if [ "$choice" == "0" ] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#pf_services[@]} ]; then
+        return
+    fi
+    
+    local selected_svc="${pf_services[$((choice-1))]}"
+    
+    echo -e "\n${CYAN}Showing logs for: ${WHITE}${selected_svc}${NC}"
+    echo -e "${YELLOW}Press Ctrl+C to exit${NC}\n"
+    sleep 2
+    
+    (trap 'exit' INT; journalctl -u "$selected_svc" -f -n 50 --no-hostname --output cat)
+}
+
+remove_port_forward() {
+    print_banner
+    echo -e "${RED}${BOLD}${ICON_ERROR} Remove Port Forward${NC}\n"
+    
+    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    
+    if [ ${#pf_services[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No port forwards configured.${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}Select port forward to remove:${NC}\n"
+    
+    local i=1
+    for svc in "${pf_services[@]}"; do
+        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local status="${RED}INACTIVE${NC}"
+        if systemctl is-active --quiet "$svc"; then
+            status="${GREEN}ACTIVE${NC}"
+        fi
+        echo -e "  $i) ${CYAN}${pf_name}${NC} - $status"
+        ((i++))
+    done
+    echo -e "  0) ${YELLOW}Cancel${NC}\n"
+    
+    ask_question "Select" "0"
+    read -r choice
+    choice=${choice:-0}
+    echo -en "${NC}"
+    
+    if [ "$choice" == "0" ] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#pf_services[@]} ]; then
+        return
+    fi
+    
+    local selected_svc="${pf_services[$((choice-1))]}"
+    local service_file="/etc/systemd/system/${selected_svc}"
+    
+    echo -e "\n${RED}${BOLD}WARNING: This will permanently remove the port forward!${NC}"
+    ask_question "Are you sure? (y/n)" "n"
+    read -r confirm
+    echo -en "${NC}"
+    
+    if [[ "$confirm" == "y" ]]; then
+        systemctl stop "$selected_svc"
+        systemctl disable "$selected_svc"
+        rm -f "$service_file"
+        systemctl daemon-reload
+        
+        echo -e "\n${GREEN}${ICON_SUCCESS} Port forward removed: ${CYAN}${selected_svc}${NC}"
+    else
+        echo -e "\n${YELLOW}Cancelled.${NC}"
+    fi
+    
+    wait_for_enter
+}
+
 manage_client() {
     # Select instance to manage
     if ! select_instance "client" "manage"; then
@@ -1396,8 +1904,9 @@ manage_client() {
         echo -e "   9) ${CYAN}Configure TLS Fingerprint (Anti-DPI)${NC}"
         echo -e "  10) ${GREEN}Test Proxy Connection${NC}"
         echo -e "  11) ${CYAN}Get Shadowsocks Link${NC}"
-        echo -e "  12) ${CYAN}Rename Instance${NC}"
-        echo -e "  13) ${RED}Uninstall Client${NC}"
+        echo -e "  12) ${MAGENTA}Port Forward Management (Gost)${NC}"
+        echo -e "  13) ${CYAN}Rename Instance${NC}"
+        echo -e "  14) ${RED}Uninstall Client${NC}"
         echo -e "   0) ${YELLOW}Back to Main${NC}"
         
         ask_question "Action" "0"
@@ -1788,6 +2297,9 @@ manage_client() {
                 wait_for_enter
                 ;;
             12)
+                manage_port_forward
+                ;;
+            13)
                 print_banner
                 echo -e "${CYAN}${BOLD}${ICON_GEAR} Rename Instance${NC}\n"
                 echo -e "${YELLOW}Current instance: ${CYAN}$service_name${NC}"
@@ -1858,7 +2370,7 @@ manage_client() {
                 fi
                 wait_for_enter
                 ;;
-            13) 
+            14) 
                 ask_question "Uninstall Client? (y/n)" "n"
                 read -r confirm
                 echo -en "${NC}"
