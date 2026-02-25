@@ -26,7 +26,7 @@ ICON_QUESTION="❓"
 
 # --- Variables & Constants ---
 APP_NAME="Aura"
-VERSION="v1.0.1"
+VERSION="v1.0.2"
 BASE_INSTALL_DIR="/root/phoenix"
 INSTALL_DIR="/root/phoenix"
 SERVICE_FILE="/etc/systemd/system/phoenix.service"
