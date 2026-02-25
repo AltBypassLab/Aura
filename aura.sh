@@ -26,7 +26,7 @@ ICON_QUESTION="❓"
 
 # --- Variables & Constants ---
 APP_NAME="Aura"
-VERSION="v1.0.0"
+VERSION="v1.0.1"
 BASE_INSTALL_DIR="/root/phoenix"
 INSTALL_DIR="/root/phoenix"
 SERVICE_FILE="/etc/systemd/system/phoenix.service"
@@ -486,19 +486,96 @@ setup_server() {
     [[ "$enable_ssh" == "y" ]] && ssh_bool="true"
     [[ "$enable_shadowsocks" == "y" ]] && ss_bool="true"
 
-    # Setup Security
+    # Ask about fingerprint support BEFORE choosing TLS mode
     print_line
-    echo -e "${BOLD}${MAGENTA}>> STEP 3: Security Configuration${NC}"
+    echo -e "${BOLD}${MAGENTA}>> STEP 3: Fingerprint Spoofing Support${NC}"
     echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "  1) ${WHITE}${BOLD}NO TLS${NC} (Plain h2c - Not Recommended)"
-    echo -e "  2) ${WHITE}${BOLD}One-Way TLS${NC} (HTTPS Style - Standard Security)"
-    echo -e "  3) ${GREEN}${BOLD}mTLS (Mutual TLS)${NC} ${YELLOW}[Recommended - Highest Security]${NC}"
+    echo -e "  ${BOLD}Do your clients need Fingerprint Spoofing?${NC}"
+    echo -e ""
+    echo -e "  ${GREEN}What is Fingerprint Spoofing?${NC}"
+    echo -e "  Makes client connections look like real browsers"
+    echo -e "  (Chrome/Firefox/Safari) to bypass DPI filtering."
+    echo -e ""
+    echo -e "  ${CYAN}Advantages:${NC}"
+    echo -e "  ${GREEN}✓${NC} Bypass ISP Deep Packet Inspection (DPI)"
+    echo -e "  ${GREEN}✓${NC} Harder to detect as VPN/Proxy"
+    echo -e "  ${GREEN}✓${NC} Better for censored networks (Iran, China, etc.)"
+    echo -e ""
+    echo -e "  ${YELLOW}Disadvantages:${NC}"
+    echo -e "  ${RED}✗${NC} Requires ECDSA key (slightly slower than Ed25519)"
+    echo -e "  ${RED}✗${NC} Cannot use key pinning (server_public_key)"
+    echo -e "  ${RED}✗${NC} Clients must use tls_mode=\"insecure\""
+    echo -e ""
+    echo -e "  ${BOLD}Recommendation:${NC}"
+    echo -e "  ${GREEN}→ YES${NC} if deploying in Iran or censored countries"
+    echo -e "  ${CYAN}→ NO${NC} if you want maximum security (mTLS)"
+    echo -e ""
     echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
     
-    ask_question "Selection" "3"
-    read -r sec_mode
-    sec_mode=${sec_mode:-3}
+    ask_question "Enable Fingerprint Support? (y/n)" "y"
+    read -r enable_fingerprint
+    enable_fingerprint=${enable_fingerprint:-y}
     echo -en "${NC}"
+    
+    local key_type_choice="1"
+    if [[ "$enable_fingerprint" == "y" ]]; then
+        key_type_choice="2"
+        echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint support enabled!${NC}"
+        echo -e "${CYAN}Server will use ECDSA P256 key (compatible with fingerprint)${NC}"
+    else
+        echo -e "\n${BLUE}${ICON_INFO} Fingerprint support disabled.${NC}"
+        echo -e "${CYAN}Server will use Ed25519 key (faster, more secure)${NC}"
+    fi
+    sleep 2
+
+    # Setup Security
+    print_line
+    echo -e "${BOLD}${MAGENTA}>> STEP 4: Security Configuration${NC}"
+    
+    if [[ "$enable_fingerprint" == "y" ]]; then
+        # Fingerprint enabled - only show compatible options
+        echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+        echo -e "  ${YELLOW}⚠️  Fingerprint Mode: Limited TLS Options${NC}"
+        echo -e ""
+        echo -e "  ${BOLD}Because you enabled Fingerprint Spoofing:${NC}"
+        echo -e "  ${RED}✗${NC} One-Way TLS and mTLS are NOT compatible"
+        echo -e "  ${RED}✗${NC} Chrome/Firefox/Safari don't support ECDSA with key pinning"
+        echo -e "  ${GREEN}✓${NC} Only NO TLS and Insecure TLS work with fingerprint"
+        echo -e ""
+        echo -e "  ${BOLD}Available Options:${NC}"
+        echo -e "  1) ${RED}${BOLD}NO TLS${NC} (Plain h2c - Not Recommended)"
+        echo -e "     ${WHITE}└─${NC} No encryption, fingerprint meaningless"
+        echo -e ""
+        echo -e "  2) ${GREEN}${BOLD}Insecure TLS${NC} ${YELLOW}[Recommended for Fingerprint]${NC}"
+        echo -e "     ${WHITE}├─${NC} Full TLS encryption"
+        echo -e "     ${WHITE}├─${NC} Works perfectly with fingerprint"
+        echo -e "     ${WHITE}└─${NC} Best for DPI bypass in Iran"
+        echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+        
+        ask_question "Selection (1 or 2)" "2"
+        read -r sec_mode_input
+        sec_mode_input=${sec_mode_input:-2}
+        echo -en "${NC}"
+        
+        # Map to actual sec_mode values
+        if [[ "$sec_mode_input" == "1" ]]; then
+            sec_mode="1"  # NO TLS
+        else
+            sec_mode="2"  # Insecure TLS (but we'll handle it specially)
+        fi
+    else
+        # No fingerprint - show all options
+        echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+        echo -e "  1) ${WHITE}${BOLD}NO TLS${NC} (Plain h2c - Not Recommended)"
+        echo -e "  2) ${WHITE}${BOLD}One-Way TLS${NC} (HTTPS Style - Standard Security)"
+        echo -e "  3) ${GREEN}${BOLD}mTLS (Mutual TLS)${NC} ${YELLOW}[Recommended - Highest Security]${NC}"
+        echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+        
+        ask_question "Selection" "3"
+        read -r sec_mode
+        sec_mode=${sec_mode:-3}
+        echo -en "${NC}"
+    fi
 
     # Base Config
     cat <<EOF > server.toml
@@ -513,58 +590,130 @@ EOF
 
     case $sec_mode in
         2|3)
-            echo -e "\n${BLUE}${ICON_KEY} ${BOLD}STEP 4: Generating Server Keys${NC}"
+            echo -e "\n${BLUE}${ICON_KEY} ${BOLD}STEP 5: Generating Server Keys${NC}"
             cd "$INSTALL_DIR" || return
             
-            # Generate server keys
-            ./phoenix-server -gen-keys > key_output.tmp 2>&1
-            sleep 1
-            
-            # Extract server public key from different possible formats
-            server_pub_key=$(grep -i "public key" key_output.tmp | grep -oE '[A-Za-z0-9+/=]{40,}' | head -n1)
-            
-            # Check if server_private.key or private.key file was created
-            if [ -f "server_private.key" ]; then
-                mv -f server_private.key server.private.key
-                echo -e "${GREEN}${ICON_SUCCESS} Server private key saved as: server.private.key${NC}"
-            elif [ -f "private.key" ]; then
-                mv -f private.key server.private.key
-                echo -e "${GREEN}${ICON_SUCCESS} Server private key saved as: server.private.key${NC}"
-            else
-                echo -e "${RED}${ICON_ERROR} Failed to generate server private key!${NC}"
-                echo -e "${YELLOW}Raw output:${NC}"
-                cat key_output.tmp
-                wait_for_enter
-                rm -f key_output.tmp
-                return
-            fi
-            
-            # If extraction failed, show output and ask for manual input
-            if [ -z "$server_pub_key" ]; then
-                echo -e "\n${YELLOW}${ICON_INFO} Raw output from key generation:${NC}"
-                print_line
-                cat key_output.tmp
-                print_line
+            if [[ "$key_type_choice" == "2" ]]; then
+                # Generate ECDSA P256 key
+                echo -e "${CYAN}Generating ECDSA P256 key (fingerprint-compatible)...${NC}"
                 
-                ask_question "Please paste SERVER PUBLIC KEY from above"
-                read -r server_pub_key
-                echo -en "${NC}"
+                # Check if openssl is available
+                if command -v openssl &> /dev/null; then
+                    # Generate ECDSA key using openssl
+                    openssl ecparam -genkey -name prime256v1 -noout -out server_ecdsa_temp.key 2>/dev/null
+                    openssl pkcs8 -topk8 -nocrypt -in server_ecdsa_temp.key -out server.private.key 2>/dev/null
+                    rm -f server_ecdsa_temp.key
+                    chmod 600 server.private.key
+                    
+                    if [ -f "server.private.key" ]; then
+                        echo -e "${GREEN}${ICON_SUCCESS} ECDSA P256 key generated successfully!${NC}"
+                        echo -e "${GREEN}${ICON_SUCCESS} Key type: ECDSA P256 (compatible with fingerprint)${NC}"
+                        server_pub_key="ECDSA_KEY_NO_PUBLIC_KEY_NEEDED"
+                    else
+                        echo -e "${RED}${ICON_ERROR} Failed to generate ECDSA key!${NC}"
+                        echo -e "${YELLOW}Falling back to Ed25519...${NC}"
+                        key_type_choice="1"
+                    fi
+                else
+                    echo -e "${RED}${ICON_ERROR} OpenSSL not found!${NC}"
+                    echo -e "${YELLOW}Installing OpenSSL...${NC}"
+                    apt update && apt install -y openssl > /dev/null 2>&1
+                    
+                    # Try again
+                    openssl ecparam -genkey -name prime256v1 -noout -out server_ecdsa_temp.key 2>/dev/null
+                    openssl pkcs8 -topk8 -nocrypt -in server_ecdsa_temp.key -out server.private.key 2>/dev/null
+                    rm -f server_ecdsa_temp.key
+                    chmod 600 server.private.key
+                    
+                    if [ -f "server.private.key" ]; then
+                        echo -e "${GREEN}${ICON_SUCCESS} ECDSA P256 key generated successfully!${NC}"
+                        server_pub_key="ECDSA_KEY_NO_PUBLIC_KEY_NEEDED"
+                    else
+                        echo -e "${RED}${ICON_ERROR} Failed to generate ECDSA key!${NC}"
+                        echo -e "${YELLOW}Falling back to Ed25519...${NC}"
+                        key_type_choice="1"
+                    fi
+                fi
             fi
             
-            rm -f key_output.tmp
+            if [[ "$key_type_choice" == "1" ]]; then
+                # Generate Ed25519 key (default)
+                echo -e "${CYAN}Generating Ed25519 key (default)...${NC}"
+                ./phoenix-server -gen-keys > key_output.tmp 2>&1
+                sleep 1
+                
+                # Extract server public key from different possible formats
+                server_pub_key=$(grep -i "public key" key_output.tmp | grep -oE '[A-Za-z0-9+/=]{40,}' | head -n1)
+                
+                # Check if server_private.key or private.key file was created
+                if [ -f "server_private.key" ]; then
+                    mv -f server_private.key server.private.key
+                    echo -e "${GREEN}${ICON_SUCCESS} Server private key saved as: server.private.key${NC}"
+                elif [ -f "private.key" ]; then
+                    mv -f private.key server.private.key
+                    echo -e "${GREEN}${ICON_SUCCESS} Server private key saved as: server.private.key${NC}"
+                else
+                    echo -e "${RED}${ICON_ERROR} Failed to generate server private key!${NC}"
+                    echo -e "${YELLOW}Raw output:${NC}"
+                    cat key_output.tmp
+                    wait_for_enter
+                    rm -f key_output.tmp
+                    return
+                fi
+                
+                # If extraction failed, show output and ask for manual input
+                if [ -z "$server_pub_key" ]; then
+                    echo -e "\n${YELLOW}${ICON_INFO} Raw output from key generation:${NC}"
+                    print_line
+                    cat key_output.tmp
+                    print_line
+                    
+                    ask_question "Please paste SERVER PUBLIC KEY from above"
+                    read -r server_pub_key
+                    echo -en "${NC}"
+                fi
+                
+                rm -f key_output.tmp
+            fi
 
             # Add private key to server config
             sed -i '/\[security\]/a private_key = "server.private.key"' "$INSTALL_DIR/server.toml"
             
-            # Save server public key to file for easy access
-            echo "$server_pub_key" > "$INSTALL_DIR/server_public.key"
-            
-            echo -e "\n${GREEN}${BOLD}${ICON_SUCCESS} Server Key Generated Successfully!${NC}"
-            print_box "SERVER PUBLIC KEY (Copy to client.toml)" "$server_pub_key"
-            
-            echo -e "${YELLOW}${BOLD}STEP 5: Configure Client${NC}"
-            echo -e "${CYAN}Add this to your client.toml:${NC}"
-            echo -e "${WHITE}server_public_key = \"$server_pub_key\"${NC}\n"
+            # Display key information based on type
+            if [[ "$key_type_choice" == "2" ]]; then
+                # ECDSA key
+                echo -e "\n${GREEN}${BOLD}${ICON_SUCCESS} ECDSA P256 Key Generated Successfully!${NC}"
+                echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+                echo -e "  ${BOLD}${WHITE}Key Type:${NC}        ${GREEN}ECDSA P256${NC}"
+                echo -e "  ${BOLD}${WHITE}File:${NC}            ${CYAN}server.private.key${NC}"
+                echo -e "  ${BOLD}${WHITE}Fingerprint:${NC}     ${GREEN}✅ Compatible${NC}"
+                echo -e "  ${BOLD}${WHITE}Client Mode:${NC}     ${CYAN}tls_mode=\"insecure\" + fingerprint=\"chrome\"${NC}"
+                echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+                
+                echo -e "\n${YELLOW}${BOLD}Client Configuration:${NC}"
+                echo -e "${CYAN}Your clients should use:${NC}"
+                echo -e "${WHITE}  remote_addr = \"SERVER_IP:$port_num\"${NC}"
+                echo -e "${WHITE}  tls_mode = \"insecure\"${NC}"
+                echo -e "${WHITE}  fingerprint = \"chrome\"  ${GREEN}# This will work!${NC}"
+                
+                # Save key type info
+                echo "ECDSA_P256" > "$INSTALL_DIR/server_key_type.txt"
+            else
+                # Ed25519 key
+                # Save server public key to file for easy access
+                echo "$server_pub_key" > "$INSTALL_DIR/server_public.key"
+                
+                echo -e "\n${GREEN}${BOLD}${ICON_SUCCESS} Ed25519 Key Generated Successfully!${NC}"
+                print_box "SERVER PUBLIC KEY (Copy to client.toml)" "$server_pub_key"
+                
+                echo -e "${YELLOW}${BOLD}Client Configuration:${NC}"
+                echo -e "${CYAN}Add this to your client.toml:${NC}"
+                echo -e "${WHITE}server_public_key = \"$server_pub_key\"${NC}"
+                echo -e "${RED}Note: Fingerprint NOT compatible with Ed25519${NC}\n"
+                
+                # Save key type info
+                echo "ED25519" > "$INSTALL_DIR/server_key_type.txt"
+            fi
             
             if [[ "$sec_mode" == "3" ]]; then
                 print_double_line
@@ -768,17 +917,87 @@ setup_client() {
     
     # Security Configuration
     print_line
-    echo -e "${BOLD}${MAGENTA}>> STEP 2: Security Configuration${NC}"
+    echo -e "${BOLD}${MAGENTA}>> STEP 2: Connection Type${NC}"
     echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "  1) ${WHITE}${BOLD}NO TLS${NC} (Plain h2c - Not Recommended)"
-    echo -e "  2) ${WHITE}${BOLD}One-Way TLS${NC} (HTTPS Style - Standard Security)"
-    echo -e "  3) ${GREEN}${BOLD}mTLS (Mutual TLS)${NC} ${YELLOW}[Recommended - Highest Security]${NC}"
+    echo -e "  ${BOLD}Is your server behind CDN/Cloudflare?${NC}"
+    echo -e "  1) ${GREEN}No${NC} - Direct connection to server IP"
+    echo -e "  2) ${BLUE}Yes${NC} - Using domain with Cloudflare proxy"
     echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
     
-    ask_question "Selection" "3"
-    read -r sec_mode
-    sec_mode=${sec_mode:-3}
+    ask_question "Selection" "1"
+    read -r connection_type
+    connection_type=${connection_type:-1}
     echo -en "${NC}"
+    
+    if [[ "$connection_type" == "2" ]]; then
+        # CDN/Cloudflare mode
+        print_line
+        echo -e "${BLUE}${ICON_INFO} ${BOLD}CDN/Cloudflare Mode${NC}"
+        echo -e "${CYAN}You will use: tls_mode = \"system\"${NC}"
+        echo -e "${YELLOW}Requirements:${NC}"
+        echo -e "  - Domain name (not IP)"
+        echo -e "  - Cloudflare proxy enabled (orange cloud)"
+        echo -e "  - Server behind Cloudflare"
+        echo -e ""
+        
+        ask_question "Continue with CDN mode? (y/n)" "y"
+        read -r cdn_confirm
+        echo -en "${NC}"
+        
+        if [[ "$cdn_confirm" != "y" ]]; then
+            echo -e "${YELLOW}Switching to direct connection mode...${NC}"
+            connection_type="1"
+            sleep 2
+        else
+            sec_mode="5"  # Special mode for CDN
+        fi
+    fi
+    
+    if [[ "$connection_type" == "1" ]]; then
+        # Direct connection - show TLS options
+        print_line
+        echo -e "${BOLD}${MAGENTA}>> STEP 2: Security Configuration (Direct Connection)${NC}"
+        echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+        echo -e "  ${BOLD}Choose TLS Mode:${NC}"
+        echo -e ""
+        echo -e "  1) ${RED}${BOLD}NO TLS${NC} (h2c - Plain HTTP/2)"
+        echo -e "     ${WHITE}├─${NC} No encryption at all"
+        echo -e "     ${WHITE}├─${NC} Fastest but ISP can see everything"
+        echo -e "     ${WHITE}└─${NC} Use: Testing only or internal networks"
+        echo -e ""
+        echo -e "  2) ${YELLOW}${BOLD}Insecure TLS${NC} (HTTPS without cert verification)"
+        echo -e "     ${WHITE}├─${NC} Full TLS encryption"
+        echo -e "     ${WHITE}├─${NC} Works with self-signed certificates"
+        echo -e "     ${WHITE}├─${NC} ${GREEN}✅ Works with Fingerprint Spoofing${NC}"
+        echo -e "     ${WHITE}└─${NC} Use: DPI bypass + good security"
+        echo -e ""
+        echo -e "  3) ${CYAN}${BOLD}One-Way TLS${NC} (Key Pinning)"
+        echo -e "     ${WHITE}├─${NC} Full TLS encryption + key verification"
+        echo -e "     ${WHITE}├─${NC} Server authenticated by public key"
+        echo -e "     ${WHITE}├─${NC} ${RED}❌ Fingerprint NOT compatible (Ed25519)${NC}"
+        echo -e "     ${WHITE}└─${NC} Use: Good security without fingerprint"
+        echo -e ""
+        echo -e "  4) ${GREEN}${BOLD}mTLS${NC} (Mutual Authentication)"
+        echo -e "     ${WHITE}├─${NC} Both server and client authenticated"
+        echo -e "     ${WHITE}├─${NC} Anti-probing protection"
+        echo -e "     ${WHITE}├─${NC} ${RED}❌ Fingerprint NOT compatible (Ed25519)${NC}"
+        echo -e "     ${WHITE}└─${NC} Use: Maximum security, no fingerprint needed"
+        echo -e ""
+        echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+        echo -e "${BLUE}${ICON_INFO} Recommendation:${NC}"
+        echo -e "  ${GREEN}Option 2 (Insecure TLS)${NC} - Best for Iran (DPI bypass with fingerprint)"
+        echo -e "  ${GREEN}Option 4 (mTLS)${NC} - Best for maximum security (no fingerprint)"
+        echo -e ""
+        echo -e "${YELLOW}⚠️  Important:${NC}"
+        echo -e "  ${WHITE}If your server has ECDSA key + fingerprint enabled:${NC}"
+        echo -e "  ${WHITE}→ Use Option 2 (Insecure TLS) only${NC}"
+        echo -e "  ${WHITE}→ Options 3 and 4 will NOT work with fingerprint${NC}"
+        
+        ask_question "Selection" "2"
+        read -r sec_mode
+        sec_mode=${sec_mode:-2}
+        echo -en "${NC}"
+    fi
     
     # Ask for server details
     print_line
@@ -804,7 +1023,77 @@ remote_addr = "$server_addr:$server_port"
 EOF
     
     case $sec_mode in
-        2|3)
+        1)
+            # NO TLS Mode
+            print_line
+            echo -e "${RED}${ICON_INFO} ${BOLD}NO TLS Mode (h2c)${NC}"
+            echo -e "${YELLOW}Warning: No encryption! ISP can see all traffic.${NC}"
+            echo -e "${CYAN}Use only for testing or internal networks.${NC}\n"
+            # No tls_mode needed - default is h2c
+            ;;
+        2)
+            # Insecure TLS Mode
+            print_line
+            echo -e "${YELLOW}${ICON_SHIELD} ${BOLD}Insecure TLS Mode${NC}"
+            echo -e "${CYAN}✓ Full TLS encryption${NC}"
+            echo -e "${CYAN}✓ Works with self-signed certificates${NC}"
+            echo -e "${CYAN}✓ Best compatibility with Fingerprint Spoofing${NC}\n"
+            
+            # Add tls_mode to config
+            cat >> "$INSTALL_DIR/client.toml" <<EOF
+# TLS Mode: Insecure (skip certificate verification)
+# Full encryption but no cert validation
+tls_mode = "insecure"
+
+EOF
+            
+            # Ask about fingerprint spoofing
+            print_line
+            echo -e "${MAGENTA}${ICON_SHIELD} ${BOLD}TLS Fingerprint Spoofing (Recommended!)${NC}"
+            echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+            echo -e "  ${BOLD}What is Fingerprint Spoofing?${NC}"
+            echo -e "  Makes your connection look like a real browser (Chrome/Firefox)"
+            echo -e "  to bypass ISP Deep Packet Inspection (DPI)."
+            echo -e ""
+            echo -e "  ${BOLD}Why use it?${NC}"
+            echo -e "  ${GREEN}✓${NC} Bypass DPI filtering in Iran"
+            echo -e "  ${GREEN}✓${NC} Harder to detect as VPN/Proxy"
+            echo -e "  ${GREEN}✓${NC} Works perfectly with Insecure TLS mode"
+            echo -e ""
+            echo -e "  ${BOLD}Choose browser fingerprint:${NC}"
+            echo -e "  1) ${GREEN}Chrome 120${NC} - Best compatibility (Recommended)"
+            echo -e "  2) ${BLUE}Firefox 120${NC} - Good alternative"
+            echo -e "  3) ${CYAN}Safari${NC} - For Apple-like fingerprint"
+            echo -e "  4) ${YELLOW}Random${NC} - Different browser each connection"
+            echo -e "  5) ${WHITE}None${NC} - Disable fingerprint spoofing"
+            echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+            
+            ask_question "Select fingerprint" "1"
+            read -r fp_choice
+            fp_choice=${fp_choice:-1}
+            echo -en "${NC}"
+            
+            case $fp_choice in
+                1) fingerprint="chrome" ;;
+                2) fingerprint="firefox" ;;
+                3) fingerprint="safari" ;;
+                4) fingerprint="random" ;;
+                *) fingerprint="" ;;
+            esac
+            
+            if [ -n "$fingerprint" ]; then
+                cat >> "$INSTALL_DIR/client.toml" <<EOF
+# TLS Fingerprint: Impersonate browser to bypass DPI
+fingerprint = "$fingerprint"
+
+EOF
+                echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint enabled: ${CYAN}$fingerprint${NC}"
+                echo -e "${GREEN}${ICON_SUCCESS} Your connection will look like a real browser!${NC}"
+            else
+                echo -e "\n${YELLOW}${ICON_INFO} Fingerprint disabled${NC}"
+            fi
+            ;;
+        3|4)
             print_line
             echo -e "${BLUE}${ICON_KEY} ${BOLD}Configuring TLS Security${NC}\n"
             
@@ -819,7 +1108,77 @@ server_public_key = "$server_pub_key"
 
 EOF
             
-            if [[ "$sec_mode" == "3" ]]; then
+            # Ask about fingerprint spoofing for One-Way TLS and mTLS
+            print_line
+            echo -e "${RED}${ICON_SHIELD} ${BOLD}⚠️  TLS Fingerprint Spoofing - NOT RECOMMENDED${NC}"
+            echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+            echo -e "  ${BOLD}${RED}CRITICAL WARNING:${NC}"
+            echo -e "  ${RED}✗${NC} Fingerprint does NOT work with One-Way TLS or mTLS"
+            echo -e "  ${RED}✗${NC} Ed25519 keys are NOT compatible with browser fingerprints"
+            echo -e "  ${RED}✗${NC} You WILL get: 'peer doesn't support signature algorithms'"
+            echo -e ""
+            echo -e "  ${BOLD}Why doesn't it work?${NC}"
+            echo -e "  Chrome/Firefox/Safari fingerprints don't advertise Ed25519"
+            echo -e "  as a valid server certificate algorithm."
+            echo -e ""
+            echo -e "  ${BOLD}${GREEN}Solution:${NC}"
+            echo -e "  ${WHITE}If you need fingerprint spoofing:${NC}"
+            echo -e "  1. Server: Enable fingerprint support (ECDSA key)"
+            echo -e "  2. Client: Use Insecure TLS mode (not One-Way/mTLS)"
+            echo -e "  3. Client: Enable fingerprint"
+            echo -e ""
+            echo -e "  ${BOLD}${YELLOW}For this setup (One-Way/mTLS):${NC}"
+            echo -e "  ${GREEN}→${NC} Keep fingerprint DISABLED for stable connection"
+            echo -e "  ${GREEN}→${NC} You still have full encryption + key pinning"
+            echo -e ""
+            echo -e "  ${BOLD}Do you still want to try fingerprint? (NOT recommended)${NC}"
+            echo -e "  1) ${GREEN}No${NC} - Disable fingerprint (Recommended)"
+            echo -e "  2) ${RED}Yes${NC} - Enable anyway (will likely fail)"
+            echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+            
+            ask_question "Selection" "1"
+            read -r fp_choice
+            fp_choice=${fp_choice:-1}
+            echo -en "${NC}"
+            
+            if [[ "$fp_choice" == "2" ]]; then
+                # User insists on trying fingerprint
+                echo -e "\n${YELLOW}⚠️  You chose to enable fingerprint despite warnings.${NC}"
+                echo -e "${YELLOW}Select browser (will likely fail):${NC}"
+                echo -e "  1) Chrome"
+                echo -e "  2) Firefox"
+                echo -e "  3) Safari"
+                echo -e "  4) Random"
+                
+                ask_question "Browser" "1"
+                read -r browser_choice
+                browser_choice=${browser_choice:-1}
+                echo -en "${NC}"
+                
+                case $browser_choice in
+                    1) fingerprint="chrome" ;;
+                    2) fingerprint="firefox" ;;
+                    3) fingerprint="safari" ;;
+                    4) fingerprint="random" ;;
+                    *) fingerprint="chrome" ;;
+                esac
+            else
+                fingerprint=""
+            fi
+            
+            if [ -n "$fingerprint" ]; then
+                cat >> "$INSTALL_DIR/client.toml" <<EOF
+# TLS Fingerprint: Impersonate browser (WILL FAIL with Ed25519)
+fingerprint = "$fingerprint"
+
+EOF
+                echo -e "\n${YELLOW}${ICON_INFO} Fingerprint enabled: ${CYAN}$fingerprint${NC}"
+                echo -e "${YELLOW}${ICON_INFO} If you get TLS errors, disable fingerprint!${NC}"
+            else
+                echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint disabled (stable connection)${NC}"
+            fi
+            
+            if [[ "$sec_mode" == "4" ]]; then
                 print_double_line
                 echo -e "${MAGENTA}${BOLD}${ICON_SHIELD} mTLS Configuration (Mutual Authentication)${NC}"
                 print_double_line
@@ -885,6 +1244,59 @@ EOF
                 echo -e "${GREEN}${BOLD}${ICON_SUCCESS} mTLS Setup Complete!${NC}"
                 echo -e "${CYAN}Your tunnel now has maximum security.${NC}"
                 print_double_line
+            fi
+            ;;
+        5)
+            # CDN/Cloudflare Mode (System TLS)
+            print_line
+            echo -e "${BLUE}${ICON_SHIELD} ${BOLD}CDN/Cloudflare Mode (System TLS)${NC}"
+            echo -e "${CYAN}Using OS certificate authorities for verification.${NC}\n"
+            
+            # Add tls_mode to config
+            cat >> "$INSTALL_DIR/client.toml" <<EOF
+# TLS Mode: System (use OS CA for verification)
+# For connections through CDN/Cloudflare
+tls_mode = "system"
+
+EOF
+            
+            # Ask about fingerprint for CDN mode
+            print_line
+            echo -e "${MAGENTA}${ICON_SHIELD} ${BOLD}TLS Fingerprint Spoofing${NC}"
+            echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+            echo -e "  ${BOLD}Fingerprint with CDN/Cloudflare:${NC}"
+            echo -e "  ${GREEN}✓${NC} Works well with System TLS mode"
+            echo -e "  ${GREEN}✓${NC} Cloudflare handles certificates properly"
+            echo -e "  ${GREEN}✓${NC} Recommended for DPI bypass"
+            echo -e ""
+            echo -e "  ${BOLD}Choose browser fingerprint:${NC}"
+            echo -e "  1) ${GREEN}Chrome 120${NC} - Best compatibility (Recommended)"
+            echo -e "  2) ${BLUE}Firefox 120${NC} - Good alternative"
+            echo -e "  3) ${CYAN}Safari${NC} - For Apple-like fingerprint"
+            echo -e "  4) ${YELLOW}Random${NC} - Different browser each connection"
+            echo -e "  5) ${WHITE}None${NC} - No fingerprint spoofing"
+            echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+            
+            ask_question "Select fingerprint" "1"
+            read -r fp_choice
+            fp_choice=${fp_choice:-1}
+            echo -en "${NC}"
+            
+            case $fp_choice in
+                1) fingerprint="chrome" ;;
+                2) fingerprint="firefox" ;;
+                3) fingerprint="safari" ;;
+                4) fingerprint="random" ;;
+                *) fingerprint="" ;;
+            esac
+            
+            if [ -n "$fingerprint" ]; then
+                cat >> "$INSTALL_DIR/client.toml" <<EOF
+# TLS Fingerprint: Impersonate browser
+fingerprint = "$fingerprint"
+
+EOF
+                echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint enabled: ${CYAN}$fingerprint${NC}"
             fi
             ;;
     esac
@@ -981,10 +1393,11 @@ manage_client() {
         echo -e "   6) ${CYAN}Update Server Public Key${NC}"
         echo -e "   7) ${YELLOW}Regenerate Client Keys (mTLS)${NC}"
         echo -e "   8) ${MAGENTA}Generate New Client Keys Manually${NC}"
-        echo -e "   9) ${GREEN}Test Proxy Connection${NC}"
-        echo -e "  10) ${CYAN}Get Shadowsocks Link${NC}"
-        echo -e "  11) ${CYAN}Rename Instance${NC}"
-        echo -e "  12) ${RED}Uninstall Client${NC}"
+        echo -e "   9) ${CYAN}Configure TLS Fingerprint (Anti-DPI)${NC}"
+        echo -e "  10) ${GREEN}Test Proxy Connection${NC}"
+        echo -e "  11) ${CYAN}Get Shadowsocks Link${NC}"
+        echo -e "  12) ${CYAN}Rename Instance${NC}"
+        echo -e "  13) ${RED}Uninstall Client${NC}"
         echo -e "   0) ${YELLOW}Back to Main${NC}"
         
         ask_question "Action" "0"
@@ -1037,6 +1450,18 @@ manage_client() {
                     print_line
                     echo -e "${YELLOW}$server_pub${NC}"
                     print_line
+                fi
+                
+                # Show TLS mode if configured
+                local tls_mode=$(grep "^tls_mode" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+                if [ -n "$tls_mode" ]; then
+                    echo -e "\n${CYAN}${BOLD}${ICON_SHIELD} TLS Mode:${NC} ${YELLOW}$tls_mode${NC}"
+                fi
+                
+                # Show fingerprint if configured
+                local fingerprint=$(grep "^fingerprint" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+                if [ -n "$fingerprint" ]; then
+                    echo -e "${CYAN}${BOLD}${ICON_SHIELD} TLS Fingerprint:${NC} ${YELLOW}$fingerprint${NC} ${GREEN}(Anti-DPI Active)${NC}"
                 fi
                 
                 # Show client public key if exists
@@ -1246,13 +1671,86 @@ manage_client() {
                 wait_for_enter
                 ;;
             9)
+                print_banner
+                echo -e "${MAGENTA}${BOLD}${ICON_SHIELD} Configure TLS Fingerprint (Anti-DPI)${NC}\n"
+                echo -e "${CYAN}TLS Fingerprint Spoofing helps bypass ISP Deep Packet Inspection.${NC}"
+                echo -e "${CYAN}It impersonates browser TLS handshakes to avoid detection.${NC}\n"
+                
+                # Show current fingerprint
+                local current_fp=$(grep "^fingerprint" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+                if [ -n "$current_fp" ]; then
+                    echo -e "${YELLOW}Current fingerprint: ${CYAN}$current_fp${NC}\n"
+                else
+                    echo -e "${YELLOW}Current: ${CYAN}None (Go default)${NC}\n"
+                fi
+                
+                echo -e "${CYAN}┌────────────────────────────────────────────────────────────┐${NC}"
+                echo -e "  Select TLS Fingerprint:"
+                echo -e "  1) ${GREEN}Chrome${NC} - Chrome 120 (Recommended)"
+                echo -e "  2) ${BLUE}Firefox${NC} - Firefox 120"
+                echo -e "  3) ${CYAN}Safari${NC} - Safari browser"
+                echo -e "  4) ${YELLOW}Random${NC} - Random browser per connection"
+                echo -e "  5) ${WHITE}None${NC} - Disable fingerprint spoofing"
+                echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+                
+                ask_question "Select fingerprint" "1"
+                read -r fp_choice
+                fp_choice=${fp_choice:-1}
+                echo -en "${NC}"
+                
+                local new_fingerprint=""
+                case $fp_choice in
+                    1) new_fingerprint="chrome" ;;
+                    2) new_fingerprint="firefox" ;;
+                    3) new_fingerprint="safari" ;;
+                    4) new_fingerprint="random" ;;
+                    5) new_fingerprint="" ;;
+                    *) new_fingerprint="chrome" ;;
+                esac
+                
+                # Update or add fingerprint in config
+                if grep -q "^fingerprint" "$INSTALL_DIR/client.toml"; then
+                    if [ -n "$new_fingerprint" ]; then
+                        # Update existing fingerprint
+                        sed -i "s|^fingerprint = \".*\"|fingerprint = \"$new_fingerprint\"|" "$INSTALL_DIR/client.toml"
+                        echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint updated to: ${CYAN}$new_fingerprint${NC}"
+                    else
+                        # Remove fingerprint line
+                        sed -i '/^fingerprint = /d' "$INSTALL_DIR/client.toml"
+                        echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint spoofing disabled${NC}"
+                    fi
+                else
+                    if [ -n "$new_fingerprint" ]; then
+                        # Add new fingerprint after server_public_key or remote_addr
+                        if grep -q "^server_public_key" "$INSTALL_DIR/client.toml"; then
+                            sed -i "/^server_public_key/a fingerprint = \"$new_fingerprint\"" "$INSTALL_DIR/client.toml"
+                        else
+                            sed -i "/^remote_addr/a \n# TLS Fingerprint Spoofing\nfingerprint = \"$new_fingerprint\"" "$INSTALL_DIR/client.toml"
+                        fi
+                        echo -e "\n${GREEN}${ICON_SUCCESS} Fingerprint set to: ${CYAN}$new_fingerprint${NC}"
+                    else
+                        echo -e "\n${YELLOW}${ICON_INFO} No fingerprint configured${NC}"
+                    fi
+                fi
+                
+                ask_question "Restart Phoenix Client service now? (y/n)" "y"
+                read -r restart_confirm
+                echo -en "${NC}"
+                
+                if [[ "$restart_confirm" == "y" ]]; then
+                    systemctl restart "$service_name"
+                    echo -e "${GREEN}${ICON_SUCCESS} Service restarted!${NC}"
+                fi
+                wait_for_enter
+                ;;
+            10)
                 local socks_port=$(grep -A2 'protocol = "socks5"' "$INSTALL_DIR/client.toml" | grep "local_addr" | grep -oE ':[0-9]+' | grep -oE '[0-9]+' | head -1)
                 if [ -z "$socks_port" ]; then
                     socks_port="1080"
                 fi
                 test_proxy_connection "$socks_port"
                 ;;
-            10)
+            11)
                 print_banner
                 echo -e "${CYAN}${BOLD}${ICON_INFO} Get Shadowsocks Link${NC}\n"
                 
@@ -1289,7 +1787,7 @@ manage_client() {
                 
                 wait_for_enter
                 ;;
-            11)
+            12)
                 print_banner
                 echo -e "${CYAN}${BOLD}${ICON_GEAR} Rename Instance${NC}\n"
                 echo -e "${YELLOW}Current instance: ${CYAN}$service_name${NC}"
@@ -1360,7 +1858,7 @@ manage_client() {
                 fi
                 wait_for_enter
                 ;;
-            12) 
+            13) 
                 ask_question "Uninstall Client? (y/n)" "n"
                 read -r confirm
                 echo -en "${NC}"
@@ -1434,6 +1932,41 @@ manage_server() {
                     listen_port="Unknown"
                 fi
                 
+                # Check key type
+                local key_type="Unknown"
+                local key_type_display=""
+                local fingerprint_compatible="Unknown"
+                local client_recommendation=""
+                
+                if [ -f "$INSTALL_DIR/server_key_type.txt" ]; then
+                    key_type=$(cat "$INSTALL_DIR/server_key_type.txt")
+                    if [ "$key_type" == "ECDSA_P256" ]; then
+                        key_type_display="${GREEN}ECDSA P256${NC} (Fingerprint Compatible)"
+                        fingerprint_compatible="${GREEN}✅ YES${NC}"
+                        client_recommendation="${CYAN}tls_mode=\"insecure\" + fingerprint=\"chrome\"${NC}"
+                    elif [ "$key_type" == "ED25519" ]; then
+                        key_type_display="${YELLOW}Ed25519${NC} (Faster, More Secure)"
+                        fingerprint_compatible="${RED}❌ NO${NC}"
+                        client_recommendation="${CYAN}server_public_key=\"...\" (no fingerprint)${NC}"
+                    fi
+                else
+                    # Try to detect from key file
+                    if [ -f "$INSTALL_DIR/server.private.key" ]; then
+                        if grep -q "BEGIN EC PRIVATE KEY" "$INSTALL_DIR/server.private.key" 2>/dev/null || \
+                           (openssl pkey -in "$INSTALL_DIR/server.private.key" -text -noout 2>/dev/null | grep -q "prime256v1"); then
+                            key_type="ECDSA_P256"
+                            key_type_display="${GREEN}ECDSA P256${NC} (Fingerprint Compatible)"
+                            fingerprint_compatible="${GREEN}✅ YES${NC}"
+                            client_recommendation="${CYAN}tls_mode=\"insecure\" + fingerprint=\"chrome\"${NC}"
+                        else
+                            key_type="ED25519"
+                            key_type_display="${YELLOW}Ed25519${NC} (Faster, More Secure)"
+                            fingerprint_compatible="${RED}❌ NO${NC}"
+                            client_recommendation="${CYAN}server_public_key=\"...\" (no fingerprint)${NC}"
+                        fi
+                    fi
+                fi
+                
                 # Display server connection details in box
                 echo -e "${CYAN}┌── Server Connection Details ──────────────────────────────┐${NC}"
                 echo -e "  ${BOLD}${WHITE}Server IP:${NC}      ${CYAN}$server_ip${NC}"
@@ -1441,17 +1974,56 @@ manage_server() {
                 echo -e "  ${BOLD}${WHITE}Connection:${NC}     ${CYAN}$server_ip:$listen_port${NC}"
                 echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
                 
-                # Show public key if exists
-                if [ -f "$INSTALL_DIR/server_public.key" ]; then
+                # Display key information
+                echo -e "\n${CYAN}┌── Server Key Information ─────────────────────────────────┐${NC}"
+                echo -e "  ${BOLD}${WHITE}Key Type:${NC}                $key_type_display"
+                echo -e "  ${BOLD}${WHITE}Fingerprint Compatible:${NC}  $fingerprint_compatible"
+                echo -e "  ${BOLD}${WHITE}Key File:${NC}                ${CYAN}server.private.key${NC}"
+                echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+                
+                # Show public key if exists (Ed25519 only)
+                if [ "$key_type" == "ED25519" ] && [ -f "$INSTALL_DIR/server_public.key" ]; then
                     local pub_key=$(cat "$INSTALL_DIR/server_public.key")
-                    echo -e "\n${GREEN}${BOLD}${ICON_KEY} Server Public Key:${NC}"
+                    echo -e "\n${GREEN}${BOLD}${ICON_KEY} Server Public Key (Ed25519):${NC}"
                     print_line
                     echo -e "${YELLOW}$pub_key${NC}"
                     print_line
-                    echo -e "${CYAN}Copy this key to your client configuration${NC}\n"
-                else
-                    echo -e "\n${YELLOW}${ICON_INFO} No public key found. Server might be using NO TLS mode.${NC}\n"
                 fi
+                
+                # Client configuration recommendation
+                echo -e "\n${CYAN}┌── Client Configuration Recommendation ────────────────────┐${NC}"
+                if [ "$key_type" == "ECDSA_P256" ]; then
+                    echo -e "  ${BOLD}${GREEN}For Fingerprint Spoofing (DPI Bypass):${NC}"
+                    echo -e "  ${WHITE}remote_addr = \"$server_ip:$listen_port\"${NC}"
+                    echo -e "  ${WHITE}tls_mode = \"insecure\"${NC}"
+                    echo -e "  ${WHITE}fingerprint = \"chrome\"  ${GREEN}# Recommended${NC}"
+                    echo -e ""
+                    echo -e "  ${BOLD}${CYAN}Or without Fingerprint:${NC}"
+                    echo -e "  ${WHITE}remote_addr = \"$server_ip:$listen_port\"${NC}"
+                    echo -e "  ${WHITE}tls_mode = \"insecure\"${NC}"
+                    echo -e "  ${WHITE}# No fingerprint line${NC}"
+                elif [ "$key_type" == "ED25519" ]; then
+                    echo -e "  ${BOLD}${GREEN}For Key Pinning (Secure):${NC}"
+                    echo -e "  ${WHITE}remote_addr = \"$server_ip:$listen_port\"${NC}"
+                    if [ -f "$INSTALL_DIR/server_public.key" ]; then
+                        local pub_key=$(cat "$INSTALL_DIR/server_public.key")
+                        echo -e "  ${WHITE}server_public_key = \"$pub_key\"${NC}"
+                    else
+                        echo -e "  ${WHITE}server_public_key = \"YOUR_SERVER_PUBLIC_KEY\"${NC}"
+                    fi
+                    echo -e "  ${RED}# Do NOT use fingerprint with Ed25519${NC}"
+                    echo -e ""
+                    echo -e "  ${BOLD}${YELLOW}Or Insecure TLS (without key pinning):${NC}"
+                    echo -e "  ${WHITE}remote_addr = \"$server_ip:$listen_port\"${NC}"
+                    echo -e "  ${WHITE}tls_mode = \"insecure\"${NC}"
+                    echo -e "  ${RED}# Do NOT use fingerprint with Ed25519${NC}"
+                else
+                    echo -e "  ${YELLOW}Unable to determine key type${NC}"
+                    echo -e "  ${WHITE}Check server.toml and key files manually${NC}"
+                fi
+                echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+                
+                echo -e "\n${BLUE}${ICON_INFO} Tip: Use Aura script on client to configure automatically${NC}\n"
                 
                 wait_for_enter
                 ;;
