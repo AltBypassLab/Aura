@@ -1367,15 +1367,18 @@ EOF
 
 # Port Forward Management with Gost
 manage_port_forward() {
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
     while true; do
         print_banner
         echo -e "${BOLD}${MAGENTA}>> Port Forward Management (Gost)${NC}\n"
         
-        # List existing port forwards
-        local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+        # List existing port forwards for this client only
+        local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${current_instance}-*.service" | awk '{print $1}'))
         
         if [ ${#pf_services[@]} -gt 0 ]; then
-            echo -e "${CYAN}Active Port Forwards:${NC}"
+            echo -e "${CYAN}Active Port Forwards for this client:${NC}"
             for svc in "${pf_services[@]}"; do
                 local status_icon="${RED}⚫${NC}"
                 if systemctl is-active --quiet "$svc"; then
@@ -1383,12 +1386,12 @@ manage_port_forward() {
                 fi
                 
                 # Extract port info from service name
-                local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+                local pf_name=$(echo "$svc" | sed "s/gost-pf-${current_instance}-//;s/.service//")
                 echo -e "  $status_icon ${CYAN}$pf_name${NC}"
             done
             echo ""
         else
-            echo -e "${YELLOW}No port forwards configured yet.${NC}\n"
+            echo -e "${YELLOW}No port forwards configured for this client yet.${NC}\n"
         fi
         
         echo -e "${BOLD}${MAGENTA}Options:${NC}"
@@ -1533,7 +1536,18 @@ add_port_forward() {
         return
     fi
     
-    echo -e "${CYAN}Phoenix SOCKS5 proxy detected on port: ${GREEN}$socks_port${NC}\n"
+    # Get server IP from client config
+    local server_addr=$(grep "^remote_addr" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+    local server_ip=$(echo "$server_addr" | cut -d':' -f1)
+    
+    if [ -z "$server_ip" ]; then
+        echo -e "${RED}${ICON_ERROR} Server IP not found in client config!${NC}"
+        wait_for_enter
+        return
+    fi
+    
+    echo -e "${CYAN}Phoenix SOCKS5 proxy: ${GREEN}127.0.0.1:$socks_port${NC}"
+    echo -e "${CYAN}Target server IP: ${GREEN}$server_ip${NC}\n"
     print_line
     
     # Ask for single or multiple ports
@@ -1585,16 +1599,6 @@ add_port_forward() {
             fi
         done
         
-        ask_question "Enter destination IP (target server IP)"
-        read -r dest_ip
-        echo -en "${NC}"
-        
-        if [ -z "$dest_ip" ]; then
-            echo -e "${RED}${ICON_ERROR} Destination IP cannot be empty!${NC}"
-            wait_for_enter
-            return
-        fi
-        
         echo -e "${CYAN}${BOLD}Destination Port Mapping:${NC}"
         echo -e "  ${WHITE}1)${NC} Same ports (9090→9090, 9091→9091, 9092→9092)"
         echo -e "  ${WHITE}2)${NC} Custom ports (specify each destination port)"
@@ -1634,9 +1638,9 @@ add_port_forward() {
             fi
         fi
         
-        # Build gost arguments for multiple ports
+        # Build gost arguments for multiple ports (using server IP from config)
         for i in "${!local_ports[@]}"; do
-            gost_args="$gost_args -L=tcp://0.0.0.0:${local_ports[$i]}/${dest_ip}:${dest_ports[$i]}"
+            gost_args="$gost_args -L=tcp://0.0.0.0:${local_ports[$i]}/${server_ip}:${dest_ports[$i]}"
         done
         
     else
@@ -1658,17 +1662,7 @@ add_port_forward() {
             return
         fi
         
-        ask_question "Enter destination IP (target server IP)"
-        read -r dest_ip
-        echo -en "${NC}"
-        
-        if [ -z "$dest_ip" ]; then
-            echo -e "${RED}${ICON_ERROR} Destination IP cannot be empty!${NC}"
-            wait_for_enter
-            return
-        fi
-        
-        ask_question "Enter destination port (target server port)"
+        ask_question "Enter destination port on server (target port on $server_ip)"
         read -r dest_port
         echo -en "${NC}"
         
@@ -1680,7 +1674,7 @@ add_port_forward() {
         
         local_ports=("$local_port")
         dest_ports=("$dest_port")
-        gost_args="-L=tcp://0.0.0.0:${local_port}/${dest_ip}:${dest_port}"
+        gost_args="-L=tcp://0.0.0.0:${local_port}/${server_ip}:${dest_port}"
     fi
     
     ask_question "Enter a name for this forward (e.g., ssh, web, mysql)" "forward-${local_ports[0]}"
@@ -1695,7 +1689,10 @@ add_port_forward() {
         return
     fi
     
-    local service_name="gost-pf-${pf_name}"
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
+    local service_name="gost-pf-${current_instance}-${pf_name}"
     local service_file="/etc/systemd/system/${service_name}.service"
     
     # Check if service already exists
@@ -1708,7 +1705,7 @@ add_port_forward() {
     # Build description
     local description=""
     if [ ${#local_ports[@]} -eq 1 ]; then
-        description="Gost Port Forward - ${pf_name} (${local_ports[0]} -> ${dest_ip}:${dest_ports[0]})"
+        description="Gost Port Forward - ${pf_name} (${local_ports[0]} -> ${server_ip}:${dest_ports[0]})"
     else
         description="Gost Port Forward - ${pf_name} (${#local_ports[@]} ports)"
     fi
@@ -1742,11 +1739,11 @@ EOF
     
     if [ ${#local_ports[@]} -eq 1 ]; then
         echo -e "  ${WHITE}Listen:${NC}      ${CYAN}0.0.0.0:${local_ports[0]}${NC}"
-        echo -e "  ${WHITE}Forward to:${NC}  ${CYAN}${dest_ip}:${dest_ports[0]}${NC}"
+        echo -e "  ${WHITE}Forward to:${NC}  ${CYAN}${server_ip}:${dest_ports[0]}${NC}"
     else
         echo -e "  ${WHITE}Ports:${NC}       ${CYAN}${#local_ports[@]} ports${NC}"
         for i in "${!local_ports[@]}"; do
-            echo -e "               ${CYAN}${local_ports[$i]} → ${dest_ip}:${dest_ports[$i]}${NC}"
+            echo -e "               ${CYAN}${local_ports[$i]} → ${server_ip}:${dest_ports[$i]}${NC}"
         done
     fi
     
@@ -1770,10 +1767,14 @@ list_port_forwards() {
     print_banner
     echo -e "${CYAN}${BOLD}${ICON_INFO} Port Forward List${NC}\n"
     
-    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
+    # List all port forward services for this client
+    local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${current_instance}-*.service" | awk '{print $1}'))
     
     if [ ${#pf_services[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No port forwards configured.${NC}"
+        echo -e "${YELLOW}No port forwards configured for this client.${NC}"
         wait_for_enter
         return
     fi
@@ -1844,10 +1845,13 @@ stop_port_forward() {
     print_banner
     echo -e "${YELLOW}${BOLD}${ICON_GEAR} Stop Port Forward${NC}\n"
     
-    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
+    local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${current_instance}-*.service" | awk '{print $1}'))
     
     if [ ${#pf_services[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No port forwards configured.${NC}"
+        echo -e "${YELLOW}No port forwards configured for this client.${NC}"
         wait_for_enter
         return
     fi
@@ -1856,7 +1860,7 @@ stop_port_forward() {
     
     local i=1
     for svc in "${pf_services[@]}"; do
-        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local pf_name=$(echo "$svc" | sed "s/gost-pf-${current_instance}-//;s/.service//")
         local status="${RED}INACTIVE${NC}"
         if systemctl is-active --quiet "$svc"; then
             status="${GREEN}ACTIVE${NC}"
@@ -1886,10 +1890,13 @@ start_port_forward() {
     print_banner
     echo -e "${GREEN}${BOLD}${ICON_GEAR} Start Port Forward${NC}\n"
     
-    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
+    local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${current_instance}-*.service" | awk '{print $1}'))
     
     if [ ${#pf_services[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No port forwards configured.${NC}"
+        echo -e "${YELLOW}No port forwards configured for this client.${NC}"
         wait_for_enter
         return
     fi
@@ -1898,7 +1905,7 @@ start_port_forward() {
     
     local i=1
     for svc in "${pf_services[@]}"; do
-        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local pf_name=$(echo "$svc" | sed "s/gost-pf-${current_instance}-//;s/.service//")
         local status="${RED}INACTIVE${NC}"
         if systemctl is-active --quiet "$svc"; then
             status="${GREEN}ACTIVE${NC}"
@@ -1928,10 +1935,13 @@ view_port_forward_logs() {
     print_banner
     echo -e "${CYAN}${BOLD}${ICON_INFO} View Port Forward Logs${NC}\n"
     
-    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
+    local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${current_instance}-*.service" | awk '{print $1}'))
     
     if [ ${#pf_services[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No port forwards configured.${NC}"
+        echo -e "${YELLOW}No port forwards configured for this client.${NC}"
         wait_for_enter
         return
     fi
@@ -1940,7 +1950,7 @@ view_port_forward_logs() {
     
     local i=1
     for svc in "${pf_services[@]}"; do
-        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local pf_name=$(echo "$svc" | sed "s/gost-pf-${current_instance}-//;s/.service//")
         local status="${RED}INACTIVE${NC}"
         if systemctl is-active --quiet "$svc"; then
             status="${GREEN}ACTIVE${NC}"
@@ -1972,10 +1982,13 @@ remove_port_forward() {
     print_banner
     echo -e "${RED}${BOLD}${ICON_ERROR} Remove Port Forward${NC}\n"
     
-    local pf_services=($(systemctl list-units --all --no-legend 'gost-pf-*.service' | awk '{print $1}'))
+    # Get current client instance name
+    local current_instance=$(basename "$INSTALL_DIR")
+    
+    local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${current_instance}-*.service" | awk '{print $1}'))
     
     if [ ${#pf_services[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No port forwards configured.${NC}"
+        echo -e "${YELLOW}No port forwards configured for this client.${NC}"
         wait_for_enter
         return
     fi
@@ -1984,7 +1997,7 @@ remove_port_forward() {
     
     local i=1
     for svc in "${pf_services[@]}"; do
-        local pf_name=$(echo "$svc" | sed 's/gost-pf-//;s/.service//')
+        local pf_name=$(echo "$svc" | sed "s/gost-pf-${current_instance}-//;s/.service//")
         local status="${RED}INACTIVE${NC}"
         if systemctl is-active --quiet "$svc"; then
             status="${GREEN}ACTIVE${NC}"
@@ -2044,6 +2057,107 @@ manage_client() {
 
     while true; do
         print_banner
+        
+        # Display current client info
+        if [ -f "$INSTALL_DIR/client.toml" ]; then
+            local client_name=$(basename "$INSTALL_DIR")
+            local server_addr=$(grep "^remote_addr" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+            local server_ip=$(echo "$server_addr" | cut -d':' -f1)
+            local server_port=$(echo "$server_addr" | cut -d':' -f2)
+            local socks_port=$(grep -A2 'protocol = "socks5"' "$INSTALL_DIR/client.toml" | grep "local_addr" | grep -oE ':[0-9]+' | grep -oE '[0-9]+' | head -1)
+            local tls_mode=$(grep "^tls_mode" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+            local fingerprint=$(grep "^fingerprint" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+            
+            # Get port forwards info for this client
+            local pf_services=($(systemctl list-units --all --no-legend "gost-pf-${client_name}-*.service" 2>/dev/null | awk '{print $1}'))
+            local pf_count=${#pf_services[@]}
+            
+            echo -e "${CYAN}┌── Current Client ──────────────────────────────────────────┐${NC}"
+            echo -e "  ${BOLD}${WHITE}Name:${NC}            ${CYAN}${client_name}${NC}"
+            echo -e "  ${BOLD}${WHITE}Server IP:${NC}       ${CYAN}${server_ip}${NC}"
+            echo -e "  ${BOLD}${WHITE}Server Port:${NC}     ${CYAN}${server_port}${NC}"
+            
+            if [ -n "$socks_port" ]; then
+                echo -e "  ${BOLD}${WHITE}SOCKS5 Port:${NC}     ${CYAN}127.0.0.1:${socks_port}${NC}"
+            fi
+            
+            # Show TLS mode - detect based on config
+            local server_pub_key=$(grep "^server_public_key" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+            local client_priv_key=$(grep "^private_key" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
+            
+            if [ -n "$tls_mode" ]; then
+                # Explicit TLS mode set
+                case "$tls_mode" in
+                    "insecure")
+                        echo -e "  ${BOLD}${WHITE}TLS Mode:${NC}        ${YELLOW}Insecure TLS${NC}"
+                        ;;
+                    "system")
+                        echo -e "  ${BOLD}${WHITE}TLS Mode:${NC}        ${YELLOW}System TLS (CDN)${NC}"
+                        ;;
+                    *)
+                        echo -e "  ${BOLD}${WHITE}TLS Mode:${NC}        ${YELLOW}${tls_mode}${NC}"
+                        ;;
+                esac
+            elif [ -n "$server_pub_key" ] && [ -n "$client_priv_key" ]; then
+                # Both keys present = mTLS
+                echo -e "  ${BOLD}${WHITE}TLS Mode:${NC}        ${GREEN}mTLS (Mutual Auth)${NC}"
+            elif [ -n "$server_pub_key" ]; then
+                # Only server key = One-Way TLS
+                echo -e "  ${BOLD}${WHITE}TLS Mode:${NC}        ${YELLOW}One-Way TLS${NC}"
+            else
+                # No TLS mode and no keys = h2c
+                echo -e "  ${BOLD}${WHITE}TLS Mode:${NC}        ${YELLOW}h2c (no TLS)${NC}"
+            fi
+            
+            # Show fingerprint
+            if [ -n "$fingerprint" ]; then
+                echo -e "  ${BOLD}${WHITE}Fingerprint:${NC}     ${GREEN}${fingerprint}${NC}"
+            else
+                echo -e "  ${BOLD}${WHITE}Fingerprint:${NC}     ${YELLOW}disabled${NC}"
+            fi
+            
+            # Show port forwards with details
+            if [ "$pf_count" -gt 0 ]; then
+                echo -e "  ${BOLD}${WHITE}Port Forwards:${NC}   ${GREEN}${pf_count} active${NC}"
+                
+                # Show first 3 port forwards with details
+                local shown=0
+                for svc in "${pf_services[@]}"; do
+                    if [ $shown -ge 3 ]; then
+                        break
+                    fi
+                    
+                    local pf_name=$(echo "$svc" | sed "s/gost-pf-${client_name}-//;s/.service//")
+                    local service_file="/etc/systemd/system/${svc}"
+                    
+                    if [ -f "$service_file" ]; then
+                        local exec_start=$(grep "^ExecStart=" "$service_file" | cut -d'=' -f2-)
+                        local port_count=$(echo "$exec_start" | grep -o '\-L=tcp://' | wc -l)
+                        
+                        if [ "$port_count" -eq 1 ]; then
+                            # Single port
+                            local local_port=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:\K[0-9]+' | head -1)
+                            local dest=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:[0-9]+/\K[^[:space:]]+' | head -1)
+                            echo -e "                   ${CYAN}├─ ${pf_name}: ${local_port}→${dest}${NC}"
+                        else
+                            # Multiple ports
+                            echo -e "                   ${CYAN}├─ ${pf_name}: ${port_count} ports${NC}"
+                        fi
+                        ((shown++))
+                    fi
+                done
+                
+                if [ "$pf_count" -gt 3 ]; then
+                    echo -e "                   ${YELLOW}└─ ... and $((pf_count - 3)) more${NC}"
+                fi
+            else
+                echo -e "  ${BOLD}${WHITE}Port Forwards:${NC}   ${YELLOW}none${NC}"
+            fi
+            
+            echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${NC}"
+            echo ""
+        fi
+        
         echo -e "${BOLD}${MAGENTA}>> Client Management Menu:${NC}"
         echo -e "   1) ${BLUE}Service Status${NC}"
         echo -e "   2) ${GREEN}Show Client Info & Keys${NC}"
@@ -2084,6 +2198,10 @@ manage_client() {
                 # Get server address from config
                 local server_addr=$(grep "^remote_addr" "$INSTALL_DIR/client.toml" | cut -d'"' -f2)
                 
+                # Extract server IP and port separately
+                local server_ip=$(echo "$server_addr" | cut -d':' -f1)
+                local server_port=$(echo "$server_addr" | cut -d':' -f2)
+                
                 # Get local ports with improved extraction
                 local socks_port=$(grep -A2 'protocol = "socks5"' "$INSTALL_DIR/client.toml" | grep "local_addr" | grep -oE ':[0-9]+' | grep -oE '[0-9]+' | head -1)
                 local ssh_port=$(grep -A2 'protocol = "ssh"' "$INSTALL_DIR/client.toml" | grep "local_addr" | grep -oE ':[0-9]+' | grep -oE '[0-9]+' | head -1)
@@ -2091,7 +2209,8 @@ manage_client() {
                 
                 # Display client configuration in box
                 echo -e "${CYAN}┌── Client Configuration ────────────────────────────────────┐${NC}"
-                echo -e "  ${BOLD}${WHITE}Server Address:${NC}  ${CYAN}$server_addr${NC}"
+                echo -e "  ${BOLD}${WHITE}Server IP:${NC}       ${CYAN}$server_ip${NC}"
+                echo -e "  ${BOLD}${WHITE}Server Port:${NC}     ${CYAN}$server_port${NC}"
                 
                 if [ -n "$socks_port" ]; then
                     echo -e "  ${BOLD}${WHITE}SOCKS5 Port:${NC}     ${CYAN}127.0.0.1:$socks_port${NC}"
