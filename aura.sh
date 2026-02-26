@@ -1536,47 +1536,156 @@ add_port_forward() {
     echo -e "${CYAN}Phoenix SOCKS5 proxy detected on port: ${GREEN}$socks_port${NC}\n"
     print_line
     
-    # Get port forward details
-    ask_question "Enter local listen port (port to open on this server)"
-    read -r local_port
+    # Ask for single or multiple ports
+    echo -e "${CYAN}${BOLD}Port Forward Mode:${NC}"
+    echo -e "  ${WHITE}1)${NC} Single port forward"
+    echo -e "  ${WHITE}2)${NC} Multiple ports forward (e.g., 9090,9091,9092)"
+    echo ""
+    ask_question "Select mode" "1"
+    read -r port_mode
+    port_mode=${port_mode:-1}
     echo -en "${NC}"
     
-    if [ -z "$local_port" ]; then
-        echo -e "${RED}${ICON_ERROR} Local port cannot be empty!${NC}"
-        wait_for_enter
-        return
+    local local_ports=()
+    local dest_ports=()
+    local gost_args=""
+    
+    if [ "$port_mode" == "2" ]; then
+        # Multiple ports mode
+        ask_question "Enter local ports (comma-separated, e.g., 9090,9091,9092)"
+        read -r local_ports_input
+        echo -en "${NC}"
+        
+        if [ -z "$local_ports_input" ]; then
+            echo -e "${RED}${ICON_ERROR} Ports cannot be empty!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        # Parse ports
+        IFS=',' read -ra local_ports <<< "$local_ports_input"
+        
+        # Trim whitespace
+        for i in "${!local_ports[@]}"; do
+            local_ports[$i]=$(echo "${local_ports[$i]}" | xargs)
+        done
+        
+        # Check if ports are valid and not in use
+        for port in "${local_ports[@]}"; do
+            if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}${ICON_ERROR} Invalid port: $port${NC}"
+                wait_for_enter
+                return
+            fi
+            
+            if is_port_in_use "$port"; then
+                echo -e "${RED}${ICON_ERROR} Port $port is already in use!${NC}"
+                wait_for_enter
+                return
+            fi
+        done
+        
+        ask_question "Enter destination IP (target server IP)"
+        read -r dest_ip
+        echo -en "${NC}"
+        
+        if [ -z "$dest_ip" ]; then
+            echo -e "${RED}${ICON_ERROR} Destination IP cannot be empty!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        echo -e "${CYAN}${BOLD}Destination Port Mapping:${NC}"
+        echo -e "  ${WHITE}1)${NC} Same ports (9090→9090, 9091→9091, 9092→9092)"
+        echo -e "  ${WHITE}2)${NC} Custom ports (specify each destination port)"
+        echo ""
+        ask_question "Select mapping" "1"
+        read -r mapping_mode
+        mapping_mode=${mapping_mode:-1}
+        echo -en "${NC}"
+        
+        if [ "$mapping_mode" == "1" ]; then
+            # Same ports
+            dest_ports=("${local_ports[@]}")
+        else
+            # Custom ports
+            ask_question "Enter destination ports (comma-separated, same order as local ports)"
+            read -r dest_ports_input
+            echo -en "${NC}"
+            
+            if [ -z "$dest_ports_input" ]; then
+                echo -e "${RED}${ICON_ERROR} Destination ports cannot be empty!${NC}"
+                wait_for_enter
+                return
+            fi
+            
+            IFS=',' read -ra dest_ports <<< "$dest_ports_input"
+            
+            # Trim whitespace
+            for i in "${!dest_ports[@]}"; do
+                dest_ports[$i]=$(echo "${dest_ports[$i]}" | xargs)
+            done
+            
+            # Check if count matches
+            if [ ${#local_ports[@]} -ne ${#dest_ports[@]} ]; then
+                echo -e "${RED}${ICON_ERROR} Number of local ports (${#local_ports[@]}) doesn't match destination ports (${#dest_ports[@]})!${NC}"
+                wait_for_enter
+                return
+            fi
+        fi
+        
+        # Build gost arguments for multiple ports
+        for i in "${!local_ports[@]}"; do
+            gost_args="$gost_args -L=tcp://0.0.0.0:${local_ports[$i]}/${dest_ip}:${dest_ports[$i]}"
+        done
+        
+    else
+        # Single port mode
+        ask_question "Enter local listen port (port to open on this server)"
+        read -r local_port
+        echo -en "${NC}"
+        
+        if [ -z "$local_port" ]; then
+            echo -e "${RED}${ICON_ERROR} Local port cannot be empty!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        # Check if port is already in use
+        if is_port_in_use "$local_port"; then
+            echo -e "${RED}${ICON_ERROR} Port $local_port is already in use!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        ask_question "Enter destination IP (target server IP)"
+        read -r dest_ip
+        echo -en "${NC}"
+        
+        if [ -z "$dest_ip" ]; then
+            echo -e "${RED}${ICON_ERROR} Destination IP cannot be empty!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        ask_question "Enter destination port (target server port)"
+        read -r dest_port
+        echo -en "${NC}"
+        
+        if [ -z "$dest_port" ]; then
+            echo -e "${RED}${ICON_ERROR} Destination port cannot be empty!${NC}"
+            wait_for_enter
+            return
+        fi
+        
+        local_ports=("$local_port")
+        dest_ports=("$dest_port")
+        gost_args="-L=tcp://0.0.0.0:${local_port}/${dest_ip}:${dest_port}"
     fi
     
-    # Check if port is already in use
-    if is_port_in_use "$local_port"; then
-        echo -e "${RED}${ICON_ERROR} Port $local_port is already in use!${NC}"
-        wait_for_enter
-        return
-    fi
-    
-    ask_question "Enter destination IP (target server IP)"
-    read -r dest_ip
-    echo -en "${NC}"
-    
-    if [ -z "$dest_ip" ]; then
-        echo -e "${RED}${ICON_ERROR} Destination IP cannot be empty!${NC}"
-        wait_for_enter
-        return
-    fi
-    
-    ask_question "Enter destination port (target server port)"
-    read -r dest_port
-    echo -en "${NC}"
-    
-    if [ -z "$dest_port" ]; then
-        echo -e "${RED}${ICON_ERROR} Destination port cannot be empty!${NC}"
-        wait_for_enter
-        return
-    fi
-    
-    ask_question "Enter a name for this forward (e.g., ssh, web, mysql)" "forward-${local_port}"
+    ask_question "Enter a name for this forward (e.g., ssh, web, mysql)" "forward-${local_ports[0]}"
     read -r pf_name
-    pf_name=${pf_name:-forward-${local_port}}
+    pf_name=${pf_name:-forward-${local_ports[0]}}
     echo -en "${NC}"
     
     # Validate name
@@ -1596,16 +1705,24 @@ add_port_forward() {
         return
     fi
     
+    # Build description
+    local description=""
+    if [ ${#local_ports[@]} -eq 1 ]; then
+        description="Gost Port Forward - ${pf_name} (${local_ports[0]} -> ${dest_ip}:${dest_ports[0]})"
+    else
+        description="Gost Port Forward - ${pf_name} (${#local_ports[@]} ports)"
+    fi
+    
     # Create systemd service
     cat > "$service_file" <<EOF
 [Unit]
-Description=Gost Port Forward - ${pf_name} (${local_port} -> ${dest_ip}:${dest_port})
+Description=${description}
 After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/gost -L=tcp://0.0.0.0:${local_port}/${dest_ip}:${dest_port} -F=socks5://127.0.0.1:${socks_port}
+ExecStart=/usr/local/bin/gost ${gost_args} -F=socks5://127.0.0.1:${socks_port}
 Restart=always
 RestartSec=3
 
@@ -1622,8 +1739,17 @@ EOF
     print_double_line
     echo -e "${CYAN}${BOLD}Configuration:${NC}"
     echo -e "  ${WHITE}Name:${NC}        ${CYAN}${pf_name}${NC}"
-    echo -e "  ${WHITE}Listen:${NC}      ${CYAN}0.0.0.0:${local_port}${NC}"
-    echo -e "  ${WHITE}Forward to:${NC}  ${CYAN}${dest_ip}:${dest_port}${NC}"
+    
+    if [ ${#local_ports[@]} -eq 1 ]; then
+        echo -e "  ${WHITE}Listen:${NC}      ${CYAN}0.0.0.0:${local_ports[0]}${NC}"
+        echo -e "  ${WHITE}Forward to:${NC}  ${CYAN}${dest_ip}:${dest_ports[0]}${NC}"
+    else
+        echo -e "  ${WHITE}Ports:${NC}       ${CYAN}${#local_ports[@]} ports${NC}"
+        for i in "${!local_ports[@]}"; do
+            echo -e "               ${CYAN}${local_ports[$i]} → ${dest_ip}:${dest_ports[$i]}${NC}"
+        done
+    fi
+    
     echo -e "  ${WHITE}Via SOCKS5:${NC}  ${CYAN}127.0.0.1:${socks_port}${NC}"
     echo -e "  ${WHITE}Service:${NC}     ${CYAN}${service_name}${NC}"
     print_double_line
@@ -1671,16 +1797,42 @@ list_port_forwards() {
             local description=$(grep "^Description=" "$service_file" | cut -d'=' -f2-)
             local exec_start=$(grep "^ExecStart=" "$service_file" | cut -d'=' -f2-)
             
-            # Parse gost command
-            local local_port=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:\K[0-9]+' | head -1)
-            local dest=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:[0-9]+/\K[^[:space:]]+' | head -1)
-            local socks=$(echo "$exec_start" | grep -oP 'socks5://\K[^[:space:]]+' | head -1)
+            # Parse gost command - check for multiple -L flags
+            local port_count=$(echo "$exec_start" | grep -o '\-L=tcp://' | wc -l)
             
-            echo -e "  $status_icon ${BOLD}${WHITE}${pf_name}${NC} - $status"
-            echo -e "     ${CYAN}Listen:${NC}      0.0.0.0:${local_port}"
-            echo -e "     ${CYAN}Forward to:${NC}  ${dest}"
-            echo -e "     ${CYAN}Via SOCKS5:${NC}  ${socks}"
-            echo -e ""
+            if [ "$port_count" -gt 1 ]; then
+                # Multiple ports
+                local socks=$(echo "$exec_start" | grep -oP 'socks5://\K[^[:space:]]+' | head -1)
+                
+                echo -e "  $status_icon ${BOLD}${WHITE}${pf_name}${NC} - $status"
+                echo -e "     ${CYAN}Ports:${NC}       ${port_count} ports"
+                
+                # Extract all port mappings
+                local mappings=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:[0-9]+/[^[:space:]]+' | head -5)
+                while IFS= read -r mapping; do
+                    local local_p=$(echo "$mapping" | grep -oP '0\.0\.0\.0:\K[0-9]+')
+                    local dest=$(echo "$mapping" | grep -oP '0\.0\.0\.0:[0-9]+/\K.+')
+                    echo -e "                  ${CYAN}${local_p} → ${dest}${NC}"
+                done <<< "$mappings"
+                
+                if [ "$port_count" -gt 5 ]; then
+                    echo -e "                  ${YELLOW}... and $((port_count - 5)) more${NC}"
+                fi
+                
+                echo -e "     ${CYAN}Via SOCKS5:${NC}  ${socks}"
+                echo -e ""
+            else
+                # Single port
+                local local_port=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:\K[0-9]+' | head -1)
+                local dest=$(echo "$exec_start" | grep -oP '0\.0\.0\.0:[0-9]+/\K[^[:space:]]+' | head -1)
+                local socks=$(echo "$exec_start" | grep -oP 'socks5://\K[^[:space:]]+' | head -1)
+                
+                echo -e "  $status_icon ${BOLD}${WHITE}${pf_name}${NC} - $status"
+                echo -e "     ${CYAN}Listen:${NC}      0.0.0.0:${local_port}"
+                echo -e "     ${CYAN}Forward to:${NC}  ${dest}"
+                echo -e "     ${CYAN}Via SOCKS5:${NC}  ${socks}"
+                echo -e ""
+            fi
         fi
     done
     
